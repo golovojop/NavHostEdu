@@ -1,0 +1,95 @@
+(Утилитка на тему: https://github.com/ciscoff/NavHostEdu)
+
+Два важных момента:
+-------------------
+
+1. Оказывается каждая View содержит ссылку на NavController, который работает с NavHost-фрагментом, внутри которого
+эта View живет (Нет, не каждая. Обычно NavHostFragment добавляет её в тэг своего элемента FragmentContainerView, который
+становится "родительским" контейнером для корневых View фрагментов из графа. Благодаря этому можно через каждую вложенную view
+запросить NavController - поиск будет идти вверх до контейнера FragmentContainerView)
+
+2. У каждой View есть ДВА tag'а. Первый (обычный) является Object, а второй является SparseArray (<Int, Object>). Так вот
+именно во втором теге хранится ссылка на NavController по ключу R.id.nav_controller_view_tag (точнее androidx.navigation.R.id.nav_controller_view_tag)
+
+Важно !!! Терминология:
+=========================
+
+FragmentContainerView - это наследник FrameLayout и может работать "стаканом" фрагментов. То есть с помощью транзакций можно управлять стеком фрагментов внутри него.
+FragmentContainerView САМ НЕ ЯВЛЯЕТСЯ фрагментом !!! И не является NavHostFragment'ом !!!
+
+В стакан FragmentContainerView можно положить NavHostFragment двумя способами:
+- XML
+- Из кода
+
+XML
+---
+
+<androidx.fragment.app.FragmentContainerView
+    android:id="@+id/need_id"
+    android:name="androidx.navigation.fragment.NavHostFragment"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:defaultNavHost="true"
+    app:navGraph="@navigation/graph_name" />
+
+Code
+----
+
+val navHost = NavHostFragment.create(R.navigation.graph_name)
+
+supportFragmentManager.beginTransaction()
+    .replace(R.id.some_container, navHost)
+    .setPrimaryNavigationFragment(navHost) // -> app:defaultNavHost="true"
+    .commit()
+
+Кроме того: Внутри FragmentContainerView могут жить только те View, которые получены из Fragment.onCreateView(LayoutInflater, ViewGroup, Bundle).
+Попытка добавить любую другую View приводит к IllegalStateException.
+
+
+NavHostFragment
+---------------
+
+Это полноценный фрагмент со всеми его onCreateView, onViewCreated и т.д. И его корневым (как я понимаю) View является
+FragmentContainerView, который и создается в onCreateView и служит роль стакана для фрагментов (destinations) графа.
+
+NavController
+-------------
+Вообще получается, что NavController - это некий аналог классического FragmentManager'а (хотя и не наследуется от него).
+И действительно: он кладет фрагменты графа в контейнер FragmentContainerView (который создается внутри NavHostFragment'а),
+он поддерживает свой аналог Fragment BackStack'а, который называется NavBackStack. Он и рулит всем этим хозяйством.
+
+Один нюанс: если в классическом FragmentManager'е мы могли добавлять в стакан фрагменты без записи операций в Fragment BackStack,
+то с NavController'ом это не прокатит. Своим стеком он управяет самостоятельно и не предоставляет методов типа addToBackStack(...)
+
+==========================================================================
+
+Важный момент по поводу обычных "классических" фрагментов на транзакциях.
+
+Есть две сущности, в которых хранятся фрагменты и инфа о них. Во-первых, это контейнер FrameLayout, который
+работает как стакан и хранит именно фрагменты, то есть их View, сложенные вертикально друг на друга.
+
+А есть ещё Fragment BackStack, который не является каким-то FrameLayout и который не хранит сами фрагменты.
+А хранит он информацию о транзакциях.
+
+Так вот такая операция просто изменит содержимое внутри FrameLayout:
+
+        supportFragmentManager
+            .beginTransaction()
+            .add(R.id.frame_layout, someFragment, "TAG")
+            .commit()
+
+Если теперь нажать кнопку Back, то приложение закроется, потому что оно ничего не знает о предыстории событий.
+Просто закроется верхняя активити и всё кончится. Однако при таком коде:
+
+        supportFragmentManager
+            .beginTransaction()
+            .add(R.id.mainContainer, someFragment, "TAG")
+-->>        .addToBackStack(null)
+            .commit()
+
+При нажатии кнопки Back система заглянет в Fragment BackStack, обнаружит там инфу о транзакции Add и сначала выполнит
+обратное ей действие Remove. И только после второго нажатия на Back приложание закроется.
+
+Итак, контейнер FrameLayout не является BackStack'ом. Это просто хранилище Views. BackStack - это записи о транзакциях.
+
+NOTE: По теме "https://startandroid.ru/ru/uroki/vse-uroki-spiskom/175-urok-105-android-3-fragments-dinamicheskaja-rabota.html"
